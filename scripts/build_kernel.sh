@@ -95,6 +95,75 @@ verify_r8q_se_dma_implementation() {
     return 0
 }
 
+verify_zinitix_zt7650_implementation() {
+    local zinitix_c="$KSRC/drivers/input/touchscreen/zinitix.c"
+    local kconfig="$KSRC/drivers/input/touchscreen/Kconfig"
+    local makefile="$KSRC/drivers/input/touchscreen/Makefile"
+    local dt_binding="$KSRC/Documentation/devicetree/bindings/input/touchscreen/zinitix,bt400.yaml"
+
+    [[ -f "$zinitix_c" && -f "$kconfig" && -f "$makefile" && -f "$dt_binding" ]] || return 1
+
+    # 1. zinitix_zt7650_data exists in the correct driver definition
+    awk '
+        /static const struct zinitix_chip_data zinitix_zt7650_data = \{/,/^\};/ {
+            if ($0 ~ /^[[:space:]]*\.point_status_reg[[:space:]]*=[[:space:]]*0x0200/ && !f1) f1=1;
+            if ($0 ~ /^[[:space:]]*\.zt_events[[:space:]]*=[[:space:]]*true/ && !f2) f2=1;
+        }
+        END { exit !(f1 && f2) }
+    ' "$zinitix_c" || return 1
+
+    # 2. struct zinitix_zt_event has the expected 16-byte layout
+    awk '
+        /struct zinitix_zt_event \{/,/static_assert\(sizeof\(struct zinitix_zt_event\) == 16\);/ {
+            if ($0 ~ /static_assert\(sizeof\(struct zinitix_zt_event\) == 16\);/) found=1
+        }
+        END { exit !found }
+    ' "$zinitix_c" || return 1
+
+    # 3. zinitix_check_presence() performs actual ZT7650 presence detection
+    awk '
+        /static int zinitix_check_presence\(/,/^}/ {
+            if ($0 ~ /zinitix_write_cmd\(.*ZINITIX_CHIP_REVISION\)/) f1=1
+        }
+        /static int zinitix_ts_probe\(/,/^}/ {
+            if ($0 ~ /zinitix_check_presence\(bt541\)/) f2=1
+        }
+        END { exit !(f1 && f2) }
+    ' "$zinitix_c" || return 1
+
+    # 4. zinitix_of_match[] maps zinitix,zt7650 to zinitix_zt7650_data
+    awk '
+        /static const struct of_device_id zinitix_of_match\[\]/,/^\};/ {
+            if ($0 ~ /\{[[:space:]]*\.compatible[[:space:]]*=[[:space:]]*"zinitix,zt7650"[[:space:]]*,[[:space:]]*\.data[[:space:]]*=[[:space:]]*&zinitix_zt7650_data[[:space:]]*\}/) found=1
+        }
+        END { exit !found }
+    ' "$zinitix_c" || return 1
+
+    # 5. CONFIG_TOUCHSCREEN_ZINITIX exists in Kconfig
+    awk '
+        /^config TOUCHSCREEN_ZINITIX/ { in_zinitix=1; next }
+        /^config / { if (in_zinitix) in_zinitix=0 }
+        in_zinitix {
+            if ($0 ~ /^[[:space:]]*tristate[[:space:]]+"Zinitix touchscreen support"/) f1=1;
+            if ($0 ~ /^[[:space:]]*depends on I2C/) f2=1;
+        }
+        END { exit !(f1 && f2) }
+    ' "$kconfig" || return 1
+
+    # 6. Makefile enables zinitix.o through CONFIG_TOUCHSCREEN_ZINITIX
+    grep -q '^[[:space:]]*obj-\$(CONFIG_TOUCHSCREEN_ZINITIX)[[:space:]]*+=[[:space:]]*zinitix\.o' "$makefile" || return 1
+
+    # 7. Device Tree YAML binding includes zinitix,zt7650
+    awk '
+        /^[[:space:]]*compatible:/ { in_compat=1 }
+        /^[[:space:]]*reg:/ { in_compat=0 }
+        in_compat && /^[[:space:]]*-[[:space:]]*zinitix,zt7650/ { found=1 }
+        END { exit !found }
+    ' "$dt_binding" || return 1
+
+    return 0
+}
+
 cd "$KSRC"
 for patch_file in "$REPO"/patches/*.patch; do
     patch_name="$(basename "$patch_file")"
@@ -105,6 +174,8 @@ for patch_file in "$REPO"/patches/*.patch; do
         echo "Already applied: $patch_name"
     elif [[ "$patch_name" == "0003-r8q-i2c-qcom-geni-force-fifo-se-dma.patch" ]] && verify_r8q_se_dma_implementation; then
         echo "Already satisfied: $patch_name (upstream kernel implements equivalent Samsung r8q SE-DMA workaround)"
+    elif [[ "$patch_name" == "0007-r8q-input-zinitix-zt7650.patch" ]] && verify_zinitix_zt7650_implementation; then
+        echo "Already satisfied: $patch_name (upstream kernel implements equivalent Zinitix ZT7650 touchscreen support)"
     else
         echo "Cannot apply or verify $patch_name; check the kernel version/source tree." >&2
         exit 1
