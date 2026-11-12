@@ -35,8 +35,12 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- defconfig
           sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' \
             "$RUNNER_TEMP/busybox-src/.config"
+          sed -i 's/^CONFIG_TC=y/# CONFIG_TC is not set/' \
+            "$RUNNER_TEMP/busybox-src/.config"
+          sed -i 's/^CONFIG_FEATURE_TC_INGRESS=y/# CONFIG_FEATURE_TC_INGRESS is not set/' \
+            "$RUNNER_TEMP/busybox-src/.config"
           make -C "$RUNNER_TEMP/busybox-src" ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- oldconfig </dev/null
+            CROSS_COMPILE=aarch64-linux-gnu- silentoldconfig </dev/null
           make -C "$RUNNER_TEMP/busybox-src" ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)"
           if aarch64-linux-gnu-readelf -l "$RUNNER_TEMP/busybox-src/busybox" \

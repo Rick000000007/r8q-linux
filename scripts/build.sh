@@ -8,17 +8,23 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/ben443/Linux-mainline-nethunter-p
 KERNEL_BRANCH="${KERNEL_BRANCH:-kali/master}"
 if [[ -z "${KSRC:-}" ]]; then
     KSRC="$REPO/dl/Linux-mainline-nethunter-pro"
-    if [[ ! -f "$KSRC/Makefile" ]]; then
+fi
+if [[ "$KSRC" != /* ]]; then
+    KSRC="$PWD/$KSRC"
+fi
+
+if [[ ! -f "$KSRC/Makefile" ]]; then
+    if [[ "$KSRC" == "$REPO/dl/Linux-mainline-nethunter-pro" ]]; then
         if ! command -v git >/dev/null 2>&1; then
             echo "git is required to fetch the default kernel source; set KSRC to an existing kernel checkout." >&2
             exit 2
         fi
         mkdir -p "$(dirname "$KSRC")"
         git clone --depth 1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$KSRC"
+    else
+        echo "KSRC must point to an existing Linux source checkout containing Makefile." >&2
+        exit 2
     fi
-elif [[ ! -f "$KSRC/Makefile" ]]; then
-    echo "KSRC must point to an existing Linux source checkout containing Makefile." >&2
-    exit 2
 fi
 
 KOUT="${KOUT:-$REPO/out/kernel}"
