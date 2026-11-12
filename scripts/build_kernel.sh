@@ -48,15 +48,65 @@ install -m 0755 "$BUSYBOX" "$STAGED_INITRAMFS/bin/busybox"
 install -m 0644 "$REPO/dts/sm8250-samsung-common.dtsi" "$QCOM_DTS/"
 install -m 0644 "$REPO/dts/sm8250-samsung-r8q.dts" "$QCOM_DTS/"
 
+verify_r8q_se_dma_implementation() {
+    local geni_i2c="$KSRC/drivers/i2c/busses/i2c-qcom-geni.c"
+    [[ -f "$geni_i2c" ]] || return 1
+
+    # 1. Verify force_se_dma flag inside struct geni_i2c_dev (excluding comments)
+    awk '
+        /^struct geni_i2c_dev \{/,/^\};/ {
+            if ($0 ~ /^[[:space:]]*bool[[:space:]]+force_se_dma;/) found=1
+        }
+        END { exit !found }
+    ' "$geni_i2c" || return 1
+
+    # 2. Verify r8q device-tree detection inside geni_i2c_probe() (excluding comments)
+    awk '
+        /static int geni_i2c_probe\(/,/^}/ {
+            if ($0 ~ /^[[:space:]]*gi2c->force_se_dma[[:space:]]*=[[:space:]]*of_machine_is_compatible\("samsung,r8q"\);/) found=1
+        }
+        END { exit !found }
+    ' "$geni_i2c" || return 1
+
+    # 3. Verify DMA threshold routing in geni_i2c_rx_one_msg()
+    awk '
+        /static int geni_i2c_rx_one_msg\(/,/^}/ {
+            if ($0 ~ /i2c_get_dma_safe_msg_buf\([^,]+,[[:space:]]*gi2c->force_se_dma[[:space:]]*\?[[:space:]]*1[[:space:]]*:[[:space:]]*32\)/) found=1
+        }
+        END { exit !found }
+    ' "$geni_i2c" || return 1
+
+    # 4. Verify DMA threshold routing in geni_i2c_tx_one_msg()
+    awk '
+        /static int geni_i2c_tx_one_msg\(/,/^}/ {
+            if ($0 ~ /i2c_get_dma_safe_msg_buf\([^,]+,[[:space:]]*gi2c->force_se_dma[[:space:]]*\?[[:space:]]*1[[:space:]]*:[[:space:]]*32\)/) found=1
+        }
+        END { exit !found }
+    ' "$geni_i2c" || return 1
+
+    # 5. Verify FIFO detection logic in geni_i2c_probe()
+    awk '
+        /static int geni_i2c_probe\(/,/^}/ {
+            if ($0 ~ /fifo_disable[[:space:]]*=[[:space:]]*!gi2c->force_se_dma/) found=1
+        }
+        END { exit !found }
+    ' "$geni_i2c" || return 1
+
+    return 0
+}
+
 cd "$KSRC"
 for patch_file in "$REPO"/patches/*.patch; do
+    patch_name="$(basename "$patch_file")"
     if patch --batch --forward --dry-run -p1 < "$patch_file" >/dev/null 2>&1; then
-        echo "Applying $(basename "$patch_file")"
+        echo "Applying $patch_name"
         patch --batch --forward -p1 < "$patch_file"
     elif patch --batch --reverse --dry-run -p1 < "$patch_file" >/dev/null 2>&1; then
-        echo "Already applied: $(basename "$patch_file")"
+        echo "Already applied: $patch_name"
+    elif [[ "$patch_name" == "0003-r8q-i2c-qcom-geni-force-fifo-se-dma.patch" ]] && verify_r8q_se_dma_implementation; then
+        echo "Already satisfied: $patch_name (upstream kernel implements equivalent Samsung r8q SE-DMA workaround)"
     else
-        echo "Cannot apply or verify $(basename "$patch_file"); check the kernel version/source tree." >&2
+        echo "Cannot apply or verify $patch_name; check the kernel version/source tree." >&2
         exit 1
     fi
 done
